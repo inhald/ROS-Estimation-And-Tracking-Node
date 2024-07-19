@@ -225,7 +225,7 @@ class Estimator {
 
 
 
-            //PREDICY
+            //PREDICT
 
             x_hat_new = A*x_hat + G*U;
 
