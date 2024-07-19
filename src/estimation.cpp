@@ -9,7 +9,7 @@
 #include <eigen3/Eigen/Dense>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf/tf.h>
-
+#include <std_msgs/Float32MultiArray.h>
 #include "nav_msgs/Odometry.h" //Odometer
 
 
@@ -21,7 +21,10 @@ class Estimator {
         //Subscriptions
         ros::Subscriber april_tag;  
         ros::Subscriber odom;
-        ros::Subscriber tf;
+
+        //Publisher
+        ros::Publisher pose_pub; 
+
 
 
         //camera
@@ -32,6 +35,7 @@ class Estimator {
         std::string tag_detections_topic = "/tag_detections";
         std::string odom_topic = "/odom";
         std::string tf_topic = "/tf";
+        std::string rel_lidar_topic = "/lidar_pose";
 
 
         //tag_pose measurement
@@ -45,9 +49,6 @@ class Estimator {
 
 
         //tag_pose prediction
-        double x_est, y_est, v_est;
-
-
         double dt;
 
 
@@ -87,7 +88,7 @@ class Estimator {
 
 
         //lidar frame position
-        double lidar_x, lidar_y, lidar_z;
+        float lidar_x, lidar_y, lidar_z;
 
 
 
@@ -101,16 +102,23 @@ class Estimator {
             nf.getParam("use_camera", cam);
             nf.getParam("odom_topic", odom_topic);
 
+            //ODOM INIT
             vel = 0; yaw = 0; dyaw = 0; dvel = 0;
 
             if(cam){
+
+                //Subscribers
                 april_tag = nf.subscribe(tag_detections_topic,1, &Estimator::tag_callback, this);
                 odom = nf.subscribe(odom_topic, 1, &Estimator::odom_callback, this);
-                // tf = nf.subscribe(tf_topic, 1, &Estimator::transform_callback, this);
+
+                //Publishers
+                pose_pub = nf.advertise<std_msgs::Float32MultiArray>(rel_lidar_topic, 10);
             }
 
-            x_est = 0.0; y_est = 0.0; v_est = 0.0;
-            dt = 1.0/30.; n = 1;
+            dt = 1.0/30.;
+
+
+            // KALMAN INIT 
 
             U = Eigen::VectorXd::Zero(4);
             // std::cout << "U: \n" << std::endl;
@@ -137,12 +145,6 @@ class Estimator {
                      0.  ,
                      0.  ,
                      0.  ; 
-
-
-            // Init 
-
-            // std::cout << "A: \n" << std::endl;
-            // std::cout << A << std::endl;
 
 
             P= Eigen::MatrixXd::Zero(6,6);
@@ -211,13 +213,7 @@ class Estimator {
 
         void kalman_update( Eigen::MatrixXd& A, Eigen::MatrixXd& H, Eigen::MatrixXd& P, Eigen::MatrixXd& Q, Eigen::MatrixXd& R, Eigen::VectorXd& x_hat){
 
-            //Predict 
-
-            // Eigen::VectorXd x_hat_new(6);
-
-            // Eigen::MatrixXd K(6,6);
-
-            // Eigen::VectorXd y(3);
+            //INIT
 
             x_hat_new = Eigen::VectorXd::Zero(6);
 
@@ -227,13 +223,17 @@ class Estimator {
 
             y << tag_x, tag_y, tag_euler_y;
 
+
+
+            //PREDICY
+
             x_hat_new = A*x_hat + G*U;
 
             P = A*P*A.transpose() + Q;
 
-            K = P*H.transpose()*(H*P*H.transpose() + R).inverse();
+            //UPDATE
 
-            // std::cout << K << std::endl;
+            K = P*H.transpose()*(H*P*H.transpose() + R).inverse();
  
             x_hat_new  += K * (y - H*x_hat_new);
 
@@ -249,26 +249,6 @@ class Estimator {
         }
 
 
-
-        void transform_callback(const tf2_msgs::TFMessageConstPtr& tf_msg){
-
-            if(tf_msg->transforms.empty()) 
-            { return;}
-
-            // std::cout << tx << " " << ty << " " << tz << " " << std::endl;
-
-            // tf2_ros::Buffer tfBuffer;
-            // tf2_ros::TransformListener tfListener(tfBuffer);
-
-            // geometry_msgs::TransformStamped transformStamped;
-            // transformStamped = tfBuffer.lookupTransform("camera_color_optical_frame", "BOB", ros::Time::now());
-
-            // geometry_msgs::Vector3 position = transformStamped.transform.translation;
-            // std::cout << position.x << " " << position.y << " " << position.z << std::endl;
-
-
-        }
-
         void tag_callback(const apriltag_ros::AprilTagDetectionArrayConstPtr& data){
 
             //hold previous detection stamp and return if no detection
@@ -279,26 +259,19 @@ class Estimator {
             else{
 
                 time_a = ros::Time::now();
+
+                //TRANSFORMATION
             
                 for(const auto& detection : data->detections){
                     tag_x = detection.pose.pose.pose.position.z;
                     tag_y = -detection.pose.pose.pose.position.x;
                     tag_euler_y = detection.pose.pose.pose.orientation.y;
-                    // time_a_secs = detection.pose.header.stamp.sec;
-                    // time_a_nanosecs = detection.pose.header.stamp.nanosecs;
                 }
 
-
-                //Transform to Frame of Lidar
 
                 if(init){
 
                     dt = (time_a - time_b).toSec();
-
-
-                    // std::cout << dt << std::endl;
-
-                    // if(dt > 1){ std::cout << "LARGER THAN 1!!" << std::endl;}
 
                 }
                 else{
@@ -308,7 +281,7 @@ class Estimator {
                     init = true; dt = 1./30.;
                 }
 
-                //Init Kalman Matrices
+                //KALMAN INIT
 
                 //Estimate Error covariance
 
@@ -322,6 +295,8 @@ class Estimator {
 
 
 
+                //STATE TRANSITION MATRIX
+
                 A = Eigen::MatrixXd::Zero(6,6);
                 A << 1. , dt , 0. , 0. , 0. , 0. ,
                  0. , 1. , 0. , 0. , 0. , 0. ,
@@ -331,6 +306,8 @@ class Estimator {
                  0. , 0. , 0. , 0. , 0. , 1. ;
 
 
+                //PROCESS NOISE
+
                 Q=Eigen::MatrixXd::Zero(6,6);
                 Q << .5*pow(dt,4)*pow(sigma_ax,2), .5*pow(dt,3)*pow(sigma_ax,2), 0. , 0.   , 0. , 0. , 
                 .5*pow(dt,3)*pow(sigma_ax,2), pow(dt,2)*pow(sigma_ax,2), 0. , 0.   , 0. , 0. ,
@@ -338,25 +315,25 @@ class Estimator {
                 0.  , 0.   , .5*pow(dt,3)*pow(sigma_ay,2), pow(dt,2)*pow(sigma_ay,2), 0. , 0. ,
                 0.  , 0.   , 0. , 0.   , .5*pow(dt,4)*pow(sigma_alpha,2), .5*pow(dt,3)*pow(sigma_alpha,2),
                 0.  , 0.   , 0. , 0.   , .5*pow(dt,4)*pow(sigma_alpha,2), pow(dt,2)*pow(sigma_alpha,2);
-                
 
 
+
+                //UPDATE
 
                 kalman_update(A, H, P, Q, R, x_hat);
 
 
 
 
-                //printing
+                //PRINTING ESTIMATE
 
-                std::cout << "x_hat: \n" <<  std::endl;
-                std::cout << x_hat << std::endl;
-                // std::cout << data->header.stamp.sec << std::endl;
-
-                lidar_x = x_hat[0]+0.095;
-                lidar_y = x_hat[2]-0.04; 
+                // std::cout << "x_hat: \n" <<  std::endl;
+                // std::cout << x_hat << std::endl;
 
                 // std::cout << lidar_y << std::endl;
+
+
+                //PRINTING MEASUREMENT
 
                 // std::cout << "\n";
                 // std::cout << "x_measure: " << tag_x << std::endl;
@@ -365,6 +342,19 @@ class Estimator {
                 // std::cout << "\n";
 
                 time_b = time_a;
+
+
+                //PUBLISHING RESULTS
+
+                std_msgs::Float32MultiArray data;
+
+                lidar_x = static_cast<float>(x_hat[0]+0.095);
+                lidar_y = static_cast<float>(x_hat[2]-0.04); 
+
+                data.data = {lidar_x, lidar_y, static_cast<float>(x_hat[4])};
+
+
+                pose_pub.publish(data);
 
 
             }
