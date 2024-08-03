@@ -5,4 +5,7 @@ A ROS Noetic compatible vehicle tracking node for position and orientation in 3-
 + apriltag-ros package [^1]: this must be installed and the tag on the tracked vehicle must be configured. Further information can be found on the apriltag-ros github.
 
 
+This package is maintained by Neelkant Teeluckdharry [teeluckn@mcmaster.ca].
+
+
 [^1]: https://github.com/AprilRobotics/apriltag_ros
